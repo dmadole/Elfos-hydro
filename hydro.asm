@@ -39,7 +39,7 @@ start:     org     2000h
            db      2+80h              ; month
            db      19                 ; day
            dw      2021               ; year
-           dw      3                  ; build
+           dw      1                  ; build
            db      'Written by David S. Madole',0
 
 
