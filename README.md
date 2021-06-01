@@ -1,6 +1,10 @@
 This is a loadable Elf/OS driver for the 1802/Mini compact flash card which supports DMA-driven I/O operations. This improves transfer rate from the CF card by a factor of approximately 10 over the standard BIOS IDE routines, and does not require any modification of BIOS to work.
 
-This driver uses the same BIOS vector table override mechanism that I developed as part of nitro, however the two do not know how to cooperate in this, so they cannot both be loaded at the same time. I have plans to fix this so that multiple modules that need this capability can be loaded at the same time.
+As of release 2 of hydro and releast 4 of nitro, the two programs can co-exist and utilize the same overridden BIOS vector table. This will also work with other future modules which use this same load mechanism. The communication is based on a global variable at 470h which I have "hijacked" from free space in Elf/OS. Hopefully this will be accepted as a standard variable.
 
 The module loads into high memory on Elf/OS and so requires kernel 0.3.1 which initializes the himem variable. It only runs in high memory and will not load into kernel memory like turbo optionally can, so it cannot coexist with applications not yet compatible with high memory, and there is no workaround. It does coexist with turbo, and the two together give a great speed improvement.
+
+This has been tested to work on the 1802/Mini and the RC1802.
+
+The 1802/Mini CF interface is designed for 4 Mhz operation, but as of the Rev B hardware (which A cards can be field-upgraded to) it will work up to at least 6 Mhz with "typical" chips, at least on the 1802/Mini. Results at elevated speeds may vary depending on the chips installed.
 
