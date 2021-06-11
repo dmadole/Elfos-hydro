@@ -25,6 +25,39 @@ himem      equ     0442h
 #define    cf_addr 2
 #define    cf_data 3
 
+           ; Bits in CF interface address port
+
+cf_count   equ     80h                 ; dma sector count
+cf_dmout   equ     40h                 ; dma out enable
+cf_dmain   equ     20h                 ; dma in enable
+cf_inten   equ     10h                 ; interrupt enable
+
+           ; IDE register addresses
+
+ide_data   equ     0
+ide_erro   equ     1
+ide_coun   equ     2
+ide_sect   equ     3
+ide_cyll   equ     4
+ide_cylh   equ     5
+ide_head   equ     6
+ide_stat   equ     7
+ide_cmnd   equ     7
+ide_alts   equ     14
+ide_cont   equ     14
+
+           ; Bits in IDE status register (address 7)
+
+ide_bsy    equ     80h                 ; busy
+ide_rdy    equ     40h                 ; ready
+ide_drq    equ     08h                 ; data request
+ide_err    equ     01h                 ; error
+
+           ; IDE command code values
+
+ide_read   equ     20h                 ; read sector
+ide_writ   equ     30h                 ; write sector
+
            ; Executable program header
 
            org     2000h - 6
@@ -38,9 +71,9 @@ start:     org     2000h
            ; Build information
 
            db      6+80h              ; month
-           db      1                  ; day
+           db      11                 ; day
            dw      2021               ; year
-           dw      3                  ; build
+           dw      4                  ; build
            db      'Written by David S. Madole',0
 
 minvers:   db      0,3,1              ; minimum kernel version needed
@@ -50,7 +83,15 @@ minvers:   db      0,3,1              ; minimum kernel version needed
            ; in particular we need support for himem variable to allocate
            ; memory for the persistent module to use.
 
-checkver:  ldi     minvers.1          ; pointer to version needed
+checkver:  ldi     message.1
+           phi     rf
+           ldi     message.0
+           plo     rf
+
+           sep     scall
+           dw      o_msg
+
+           ldi     minvers.1          ; pointer to version needed
            phi     r7
            ldi     minvers.0
            plo     r7
@@ -69,11 +110,11 @@ versloop:  lda     r7                 ; compare minimum vs running versions
            sd
            irx
            lbnf    versfail           ; negative, running < minimum, so fail
-           bnz     checkvec           ; positive, running > minimum, so pass
+           lbnz    checkvec           ; positive, running > minimum, so pass
 
            dec     rf                 ; zero, so equal, keep checking
            glo     rf
-           bnz     versloop           ; if we exit this versions are same
+           lbnz    versloop           ; if we exit this versions are same
 
 
            ; Check if we are able to shim BIOS, either because we are the
@@ -87,7 +128,7 @@ checkvec:  ldi     biosvec.1
 
            ghi     r4                 ; if BIOS vector is still in ROM
            smi     0f8h               ; then continue installing
-           bdf     allocmem
+           lbdf    allocmem
 
            ldn     rb                 ; otherwise fail unless there is a
            adi     1                  ; new table pointed to by biosvec
@@ -150,9 +191,9 @@ copycode:  lda     ra                 ; copy code to destination address
            inc     r9
            dec     rf
            glo     rf
-           bnz     copycode
+           lbnz    copycode
            ghi     rf
-           bnz     copycode
+           lbnz    copycode
 
 
            ; If there is already a BIOS vector page allocated from a prior
@@ -161,14 +202,14 @@ copycode:  lda     ra                 ; copy code to destination address
            ldn     rb                 ; check is there is a bios vector
            adi     1                  ; already, otherwise install one
            shr                        ; this tests for either 00 or FF
-           bz      allocvec           ; as either could mean uninitialized
+           lbz     allocvec           ; as either could mean uninitialized
 
            lda     rb                 ; if non-zero, set into r9
            phi     r9
            ldn     rb
            plo     r9
 
-           br      patching           ; go patch the routines we need to
+           lbr     patching           ; go patch the routines we need to
 
 
            ; Otherwise, get a page of memory for a new BIOS vector table.
@@ -195,7 +236,7 @@ copyvec:   lda     ra                 ; copy the whole page contents
            str     r9
            inc     r9
            glo     r9
-           bnz     copyvec            ; loop until lsb wraps to zero
+           lbnz    copyvec            ; loop until lsb wraps to zero
 
            ghi     r9                 ; adjust back to start of page
            smi     1
@@ -229,19 +270,64 @@ copyvec:   lda     ra                 ; copy the whole page contents
            ; this point, R9 points to the new BIOS jump table in RAM, and
            ; R8 points to the base address of the module code in RAM.
 
-patching:  ldi     patchtbl.1        ; Get point to table of patch points
+patching:  ldi     success.1          ; address of success message to print
+           phi     rf
+           ldi     success.0
+           plo     rf
+
+           sep     scall
+           dw      o_msg
+
+           ldi     buffer.1
+           phi     r0
+           ldi     buffer.0
+           plo     r0
+
+           sex     r3
+
+           out     cf_addr
+           db      cf_count + 1
+
+           out     cf_addr
+           db      cf_dmain + ide_coun
+
+           ghi     r0
+           smi     buffer.1
+           lbnz    intisdma
+
+           ldi     patchpio.1        ; Get point to table of patch points
            phi     r7
-           ldi     patchtbl.0
+           ldi     patchpio.0
            plo     r7
+
+           ldi     piomode.1          ; address of success message to print
+           phi     rf 
+           ldi     piomode.0
+           plo     rf
+
+           lbr     setpatch
+
+intisdma:  ldi     patchdma.1        ; Get point to table of patch points
+           phi     r7
+           ldi     patchdma.0
+           plo     r7
+
+           ldi     dmamode.1          ; address of success message to print
+           phi     rf
+           ldi     dmamode.0
+           plo     rf
+
+setpatch:  sep     scall
+           dw      o_msg
 
            sex     r7                 ; add instructions will use table
 
 ptchloop:  lda     r7                 ; a zero marks end of the table
-           bz      ptchdone
+           lbz     return
 
            phi     ra                 ; save msb of address but check if
            smi     0ffh               ; it's a bios ff00 vector, if it's
-           bnz     isntffxx           ; not then use as-is
+           lbnz    isntffxx           ; not then use as-is
 
            ghi     r9                 ; if the address is ffxx replace it
            phi     ra                 ; with equivalent in the copy in RAM
@@ -264,56 +350,33 @@ isntffxx:  lda     r7                 ; get lsb of patch address
 
            inc     r7                 ; point to next entry in table and
            inc     r7                 ; continue until all are done
-           br      ptchloop
+           lbr     ptchloop
 
-
-           ; At this point we are done, output a success message and end.
-
-ptchdone:  sex     r2                 ; put stack back to r2 and push
-           ldi     success.1          ; address of success message to print
-           stxd
-           ldi     success.0
-           stxd
-
-           lbr     output             ; output copyright plus success
-
-           org     $ + 0ffh & 0ff00h
-
-output:    ldi     message.1
-           phi     rf
-           ldi     message.0
-           plo     rf
-
-           sep     scall
-           dw      o_msg
-
-           inc     r2
-           lda     r2
-           plo     rf
-           ldn     r2
-           phi     rf
-
-           sep     scall
-           dw      o_msg
-
-           sep     sret
+           ; Output failure messsages if problems installing
 
 hookfail:  sex     r2
            ldi     hookmsg.1
-           stxd
+           phi     rf
            ldi     hookmsg.0
-           stxd
-           br      output
+           plo     rf
+
+           lbr     output
 
 versfail:  sex     r2
            ldi     vermsg.1
-           stxd
+           phi     rf
            ldi     vermsg.0
-           stxd
-           br      output
+           plo     rf
 
-message:   db      'Hydro Compact Flash DMA Driver Build 3 for Elf/OS',13,10,0
+output:    sep     scall
+           dw      o_msg
+
+return:    sep     sret
+
+message:   db      'Hydro IDE Driver Build 4 for Elf/OS',13,10,0
 success:   db      'Copyright 2021 by David S Madole',13,10,0
+piomode:   db      'Installing PIO mode',13,10,0
+dmamode:   db      'Installing DMA mode',13,10,0
 vermsg:    db      'ERROR: Needs kernel version 0.3.1 or higher',13,10,0
 hookmsg:   db      'ERROR: SCALL is already diverted from BIO','S',13,10,0
 
@@ -321,47 +384,18 @@ hookmsg:   db      'ERROR: SCALL is already diverted from BIO','S',13,10,0
            ; Table giving addresses of jump vectors we need to update, along
            ; with offset from the start of the module to repoint those to.
 
-patchtbl:  dw      f_ideread, cfread - module
-           dw      f_idewrite, cfwrite - module
+patchpio:  dw      f_ideread, pioread - module
+           dw      f_idewrite, piowrite - module
+           db      0
+
+patchdma:  dw      f_ideread, dmaread - module
+           dw      f_idewrite, dmawrite - module
            db      0
 
            org     $ + 0ffh & 0ff00h
 
 module:    ; Start the actual module code on a new page so that it forms
            ; a block of page-relocatable code that will be copied to himem.
-
-
-; Bits in CF interface address port
-
-cf_count   equ     80h                 ; dma sector count
-cf_dmout   equ     40h                 ; dma out enable
-cf_dmain   equ     20h                 ; dma in enable
-cf_inten   equ     10h                 ; interrupt enable
-
-; IDE register addresses
-
-ide_erro   equ     1
-ide_coun   equ     2
-ide_sect   equ     3
-ide_cyll   equ     4
-ide_cylh   equ     5
-ide_head   equ     6
-ide_stat   equ     7
-ide_cmnd   equ     7
-ide_alts   equ     14
-ide_cont   equ     14
-
-; Bits in IDE status register (address 7)
-
-ide_bsy    equ     80h                 ; busy
-ide_rdy    equ     40h                 ; ready
-ide_drq    equ     08h                 ; data request
-ide_err    equ     01h                 ; error
-
-; IDE command code values
-
-ide_read   equ     20h                 ; read sector
-ide_writ   equ     30h                 ; write sector
 
 
 ; When the interface is DMA-driven, read and write are identical operations,
@@ -387,58 +421,88 @@ ide_writ   equ     30h                 ; write sector
 ; ## Not documented but important as some Elf/OS code assumes this behavior.
 
 
-cfwrite:   dec     r2                  ; make room on stack
-           ldi     cf_dmout            ; select value for dma out enable
-           stxd                        ; push dma enable to stack
-           ldi     ide_writ            ; ide command to write block
-           br      cfblock             ; go to block i/o code
+piowrite:  ldi     dopioout.0          ; address of polled output routine
+           br      writecmd
 
-cfread:    dec     r2                  ; make room on stack
-           ldi     cf_dmain            ; select value for dma in enable
-           stxd                        ; push dma enable to stack
-           ldi     ide_read            ; ide command to read block
+pioread:   ldi     dopioinp.0          ; address of polled input routine
+           br      readcmd
 
-cfblock:   stxd                        ; push ide command to stack
+dmawrite:  ldi     dodmaout.0          ; address of dma output routine
+writecmd:  plo     re
+
+           ldi     ide_writ            ; write sector command
+           br      cfblock
+
+dmaread:   ldi     dodmainp.0          ; address of dma input routine
+readcmd:   plo     re
+
+           ldi     ide_read            ; read sector command
+cfblock:   stxd
 
            sex     r3                  ; use inline data value
            out     cf_addr             ; output to address port
-           db      ide_stat            ; status register
+           db      ide_stat            ; select status register
 
            sex     r2                  ; use stack for input
            inp     cf_data             ; read status register
            xri     ide_rdy             ; invert state of RDY bit
            ani     ide_bsy + ide_rdy   ; test BSY and RDY bits only
-           bnz     cferror1            ; error if BSY set or RDY clear
+           bnz     cfpopret            ; error if BSY set or RDY clear
 
-           ghi     rf                  ; setup dma pointer to point
-           phi     r0                  ; to specified data buffer
-           glo     rf
-           plo     r0
+           ldi     ide_cmnd            ; command register
+           stxd
 
-           ghi     r8                  ; get device
-           stxd                        ; write to stack
-           glo     r8                  ; get high of lba
-           stxd                        ; write to stack
-           ghi     r7                  ; get mid of lba
-           stxd                        ; write to stack
-           glo     r7                  ; get lo of lba
-           stxd                        ; write to stack
-           ldi     1                   ; read one sector
-           str     r2                  ; write to stack
+           ghi     r8                  ; device number
+           stxd
+           ldi     ide_head            ; device and head register
+           stxd
 
-           ghi     r3                  ; use rf for temporary pointer since
-           phi     rf                  ; we'll overwrite it later anyway
-           ldi     cftable.0           ; load with pointer to table
-           plo     rf                  ; of ide register addresses to load
+           glo     r8                  ; high byte of lba
+           stxd
+           ldi     ide_cylh            ; high cylinder byte register
+           stxd
 
-cfsetup:   sex     rf                  ; get value from ide address table
-           out     cf_addr             ; output to address port
-           sex     r2                  ; get argument data value from stack
-           out     cf_data             ; output to data port
-           ldn     rf                  ; if zero then at end of list
-           bnz     cfsetup             ; loop back if not done
+           ghi     r7                  ; middle byte of lba
+           stxd
+           ldi     ide_cyll            ; low cylinder byte register
+           stxd
 
-           sex     r2
+           glo     r7                  ; low byte of lba
+           stxd
+           ldi     ide_sect            ; sector number register
+           stxd
+
+           ldi     1                   ; transfer one sector
+           stxd
+           ldi     ide_coun            ; sector count register
+           stxd
+
+           ghi     r8                  ; device number
+           stxd
+           ldi     ide_head            ; device and head register
+           str     r2
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
+           out     cf_addr
+           out     cf_data
+
            dec     r2
 
 cfready:   inp     cf_data             ; read status register
@@ -450,58 +514,130 @@ cfready:   inp     cf_data             ; read status register
            bz      cfready             ; wait until either is
 
            ani     ide_err             ; check if ERR is set
-           bnz     cferror2            ; jump if ERR is set
+           bnz     cfreturn            ; jump if ERR is set
 
-           sex     r3                  ; use inline value
+           sex     r3                  ; out from inline values
+           glo     re                  ; get address of i/o routine
+           plo     r3                  ; jump to routine address
+
+           ; Polled input routine for non-DMA operation unrolls the input
+           ; loop by a factor of 8 to reduce loop overhead and approximately
+           ; double read speed over standard BIOS driver. This uses RF
+           ; directly as the data pointer.
+
+dopioinp:  out     cf_addr             ; select data register
+           db      ide_data
+
+           ldi     512/8               ; count for number of loops
+           plo     re                  ; loop in unrolled by factor of 8
+           sex     rf                  ; input to buffer
+
+inploop:   inp     cf_data             ; input bytes from data port into
+           inc     rf                  ; buffer and increment pointer
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+           inp     cf_data
+           inc     rf
+
+           dec     re                  ; loop until all transferred
+           glo     re
+           bnz     inploop
+
+           sex     r3                  ; reset to inline data values
+           br      cfresume            ; check for error
+
+           ; Polled input routine for non-DMA operation just like the input
+           ; routine above but slightly faster due to the post-increment
+           ; built into the OUT instruction. Speed is approximately three
+           ; times standard BIOS driver.
+
+dopioout:  out     cf_addr             ; select data register
+           db      ide_data
+
+           ldi     512/8               ; count for number of loops
+           plo     re                  ; loop in unrolled by factor of 8
+           sex     rf                  ; input to buffer
+
+outloop:   out     cf_data             ; output bytes to data port
+           out     cf_data             ; pointer will auto increment
+           out     cf_data
+           out     cf_data
+           out     cf_data
+           out     cf_data
+           out     cf_data
+           out     cf_data
+
+           dec     re                  ; loop until all transferred
+           glo     re
+           bnz     outloop
+
+           sex     r3                  ; reset to inline data values
+           br      cfresume            ; check for error
+
+           ; DMA-based input driver works on 1802/Mini adapter and run at
+           ; approximately ten times the transfer rate of the standard BIOS
+           ; driver. Needs to use R0 as DMA memory pointer.
+
+dodmaout:  ghi     rf                  ; setup dma pointer to point
+           phi     r0                  ; to specified data buffer
+           glo     rf
+           plo     r0
+
            out     cf_addr             ; set sector counter for dma
            db      cf_count + 1        ; to one sector
 
-           sex     r2                  ; dma enable value is on stack
-           inc     r2
-           out     cf_addr             ; enable appropriate dma direction
-           dec     r2                  ; dma happens here, it's magic!
+           out     cf_addr             ; enable dma for output
+           db      cf_dmout            ; transfer will magically happen here
 
-           sex     r3                  ; use inline value
-           out     cf_addr             ; clear address register to
-           db      ide_stat            ; disable dma, set status register
+           br      setpoint            ; check for errors
+
+           ; DMA-based input routine just like previous output routine. Also
+           ; transfers one byte per cycle so ten times standard rate.
+
+dodmainp:  ghi     rf                  ; setup dma pointer to point
+           phi     r0                  ; to specified data buffer
+           glo     rf
+           plo     r0
+
+           out     cf_addr             ; set sector counter for dma
+           db      cf_count + 1        ; to one sector
+
+           out     cf_addr             ; enable dma for input
+           db      cf_dmain            ; transfer will magically happen here
+
+setpoint:  ghi     r0                  ; update rf to point just past
+           phi     rf                  ; transferred data as some code
+           glo     r0                  ; such as the sys command relies
+           plo     rf                  ; on this behavior writing sectors
+
+           ; End of data transfer, check for errors and report as needed.
+
+cfresume:  out     cf_addr             ; clear address register to disable
+           db      ide_stat            ; dma and select status register
 
            sex     r2                  ; input to stack
+
 cfcheck:   inp     cf_data             ; read status register
            xri     ide_rdy             ; check if RDY is set
            ani     ide_bsy + ide_rdy   ; and BSY is clear
            bnz     cfcheck             ; wait until they are
 
-           ghi     r0                  ; update rf to point just past
-           phi     rf                  ; transferred data as some code
-           glo     r0                  ; such as the sys command relies
-           plo     rf                  ; on this behavior writing sectors
-
-           lda     r2                  ; get status register, pop stack
-           adi     0                   ; clear df flag to indicate no error
+cfreturn:  adi     255                 ; if d=0 set df=0, if d>0 set df=1
+           ldn     r2                  ; get saved status register value
            sep     r5                  ; return to caller
 
-cferror1:  lda     r2                  ; get status register
-           inc     r2                  ; pop the stack three times to
-
-cfreturn:  inc     r2                  ; restore proper return position
-           smi     0                   ; set df flag to indicate error
-           sep     r5                  ; return to caller
-
-cferror2:  ghi     r0                  ; update rf to point just past
-           phi     rf                  ; transferred data as some code
-           glo     r0                  ; such as the sys command relies
-           plo     rf                  ; on this behavior writing sectors
-
-           lda     r2                  ; get status register, discard dma
-           br      cfreturn            ; return to caller setting df
-
-cftable:   db      ide_coun            ; sector count
-           db      ide_sect            ; sector start
-           db      ide_cyll            ; cylinder low
-           db      ide_cylh            ; cylinder high
-           db      ide_head            ; head/device
-           db      ide_cmnd            ; command
-           db      0                   ; end of list
+cfpopret:  inc     r2
+           br      cfreturn
 
 
 ; SCRT call routine mostly copied from BIOS and modified to recognize moved
@@ -540,4 +676,6 @@ nochange:  lda     r6                  ; copy subroutine address
 
 
 end:       ; That's all folks!
+
+buffer:    ds      512
 
