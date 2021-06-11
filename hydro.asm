@@ -475,15 +475,7 @@ cfblock:   stxd
            ldi     1                   ; transfer one sector
            stxd
            ldi     ide_coun            ; sector count register
-           stxd
-
-           ghi     r8                  ; device number
-           stxd
-           ldi     ide_head            ; device and head register
            str     r2
-
-           out     cf_addr
-           out     cf_data
 
            out     cf_addr
            out     cf_data
