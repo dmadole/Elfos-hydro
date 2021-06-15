@@ -71,9 +71,9 @@ start:     org     2000h
            ; Build information
 
            db      6+80h              ; month
-           db      11                 ; day
+           db      14                 ; day
            dw      2021               ; year
-           dw      4                  ; build
+           dw      5                  ; build
            db      'Written by David S. Madole',0
 
 minvers:   db      0,3,1              ; minimum kernel version needed
@@ -291,6 +291,8 @@ patching:  ldi     success.1          ; address of success message to print
            out     cf_addr
            db      cf_dmain + ide_coun
 
+           sex     r2
+
            ghi     r0
            smi     buffer.1
            lbnz    intisdma
@@ -373,7 +375,7 @@ output:    sep     scall
 
 return:    sep     sret
 
-message:   db      'Hydro IDE Driver Build 4 for Elf/OS',13,10,0
+message:   db      'Hydro IDE Driver Build 5 for Elf/OS',13,10,0
 success:   db      'Copyright 2021 by David S Madole',13,10,0
 piomode:   db      'Installing PIO mode',13,10,0
 dmamode:   db      'Installing DMA mode',13,10,0
