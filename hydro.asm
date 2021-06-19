@@ -71,9 +71,9 @@ start:     org     2000h
            ; Build information
 
            db      6+80h              ; month
-           db      14                 ; day
+           db      19                 ; day
            dw      2021               ; year
-           dw      5                  ; build
+           dw      6                  ; build
            db      'Written by David S. Madole',0
 
 minvers:   db      0,3,1              ; minimum kernel version needed
@@ -265,7 +265,6 @@ copyvec:   lda     ra                 ; copy the whole page contents
            adci    (newcall-module).1
            phi     r4
 
-
            ; Update kernel and BIOS hooks to point to our module code. At
            ; this point, R9 points to the new BIOS jump table in RAM, and
            ; R8 points to the base address of the module code in RAM.
@@ -278,26 +277,46 @@ patching:  ldi     success.1          ; address of success message to print
            sep     scall
            dw      o_msg
 
-           ldi     buffer.1
+           ; Test if DMA is supported by trying a DMA operation and seeing
+           ; if R0 changes. Also test for high DMAIN latency that causes
+           ; an extra DMA cycle by seeing if the transfer is not 512 bytes.
+           ; On hardware with slow DMAIN and extra byte will be transferred.
+           ; For simplicity, we don't actually read disk contents, rather we
+           ; just DMAIN the sector count buffer of the drive over and over.
+
+           ldi     255                ; run test 255 times to make sure that
+           plo     re                 ;  dmain isn't on the edge of being ok
+
+dmatest:   ldi     buffer.1           ; setup dma buffer pointer
            phi     r0
            ldi     buffer.0
            plo     r0
 
-           sex     r3
+           sex     r3                 ; use inline arguments
 
-           out     cf_addr
+           out     cf_addr            ; set one sector to transfer
            db      cf_count + 1
 
-           out     cf_addr
+           out     cf_addr            ; enable dma in of count register
            db      cf_dmain + ide_coun
 
-           sex     r2
+           sex     r2                 ; switch back to r2
+ 
+           glo     r0                 ; if r0.0 is not equal to the starting
+           smi     buffer.0           ;  value still, we did the wrong count,
+           lbnz    fixupdma           ;  we want to use the fixup routine
 
-           ghi     r0
-           smi     buffer.1
-           lbnz    intisdma
+           dec     re                 ; loop the full 255 tests
+           glo     re
+           bnz     dmatest
 
-           ldi     patchpio.1        ; Get point to table of patch points
+           ghi     r0                 ; if r0.0 was right on all, then check
+           smi     buffer.1           ;  if r0.1 even changed, if not then
+           lbnz    intisdma           ;  this hardware doesn't support dma
+
+           ; Patch BIOS to point to PIO disk routines
+
+           ldi     patchpio.1         ; Get point to table of patch points
            phi     r7
            ldi     patchpio.0
            plo     r7
@@ -308,6 +327,22 @@ patching:  ldi     success.1          ; address of success message to print
            plo     rf
 
            lbr     setpatch
+
+           ; Patch BIOS to point to DMA disk routines with fixup code
+
+fixupdma:  ldi     patchfix.1        ; Get point to table of patch points
+           phi     r7
+           ldi     patchfix.0
+           plo     r7
+
+           ldi     fixmode.1          ; address of success message to print
+           phi     rf 
+           ldi     fixmode.0
+           plo     rf
+
+           lbr     setpatch
+
+           ; Patch BIOS to point to normal DMA disk routines
 
 intisdma:  ldi     patchdma.1        ; Get point to table of patch points
            phi     r7
@@ -375,10 +410,11 @@ output:    sep     scall
 
 return:    sep     sret
 
-message:   db      'Hydro IDE Driver Build 5 for Elf/OS',13,10,0
+message:   db      'Hydro IDE Driver Build 6 for Elf/OS',13,10,0
 success:   db      'Copyright 2021 by David S Madole',13,10,0
 piomode:   db      'Installing PIO mode',13,10,0
 dmamode:   db      'Installing DMA mode',13,10,0
+fixmode:   db      'Installing DMA mode (with overclock fix)',13,10,0
 vermsg:    db      'ERROR: Needs kernel version 0.3.1 or higher',13,10,0
 hookmsg:   db      'ERROR: SCALL is already diverted from BIO','S',13,10,0
 
@@ -391,6 +427,10 @@ patchpio:  dw      f_ideread, pioread - module
            db      0
 
 patchdma:  dw      f_ideread, dmaread - module
+           dw      f_idewrite, dmawrite - module
+           db      0
+
+patchfix:  dw      f_ideread, fixread - module
            dw      f_idewrite, dmawrite - module
            db      0
 
@@ -427,6 +467,9 @@ piowrite:  ldi     dopioout.0          ; address of polled output routine
            br      writecmd
 
 pioread:   ldi     dopioinp.0          ; address of polled input routine
+           br      readcmd
+
+fixread:   ldi     dofixinp.0          ; address of fix-up dma input routine
            br      readcmd
 
 dmawrite:  ldi     dodmaout.0          ; address of dma output routine
@@ -514,10 +557,9 @@ cfready:   inp     cf_data             ; read status register
            glo     re                  ; get address of i/o routine
            plo     r3                  ; jump to routine address
 
-           ; Polled input routine for non-DMA operation unrolls the input
-           ; loop by a factor of 8 to reduce loop overhead and approximately
-           ; double read speed over standard BIOS driver. This uses RF
-           ; directly as the data pointer.
+           ; Polled input routines for non-DMA operation unrolls the input
+           ; loop by a factor of 8 to reduce loop overhead and increase speed
+           ; by 2x for reads and 3x for writes over standard BIOS driver.
 
 dopioinp:  out     cf_addr             ; select data register
            db      ide_data
@@ -550,11 +592,6 @@ inploop:   inp     cf_data             ; input bytes from data port into
            sex     r3                  ; reset to inline data values
            br      cfresume            ; check for error
 
-           ; Polled input routine for non-DMA operation just like the input
-           ; routine above but slightly faster due to the post-increment
-           ; built into the OUT instruction. Speed is approximately three
-           ; times standard BIOS driver.
-
 dopioout:  out     cf_addr             ; select data register
            db      ide_data
 
@@ -582,10 +619,13 @@ outloop:   out     cf_data             ; output bytes to data port
            ; approximately ten times the transfer rate of the standard BIOS
            ; driver. Needs to use R0 as DMA memory pointer.
 
-dodmaout:  ghi     rf                  ; setup dma pointer to point
-           phi     r0                  ; to specified data buffer
-           glo     rf
-           plo     r0
+dodmaout:  glo     rf                  ; setup dma pointer to point
+           plo     r0                  ; to specified data buffer
+           ghi     rf
+           phi     r0
+
+           adi     2                   ; update rf to account for transfer
+           phi     rf
 
            out     cf_addr             ; set sector counter for dma
            db      cf_count + 1        ; to one sector
@@ -593,15 +633,15 @@ dodmaout:  ghi     rf                  ; setup dma pointer to point
            out     cf_addr             ; enable dma for output
            db      cf_dmout            ; transfer will magically happen here
 
-           br      setpoint            ; check for errors
+           br      cfresume            ; check for errors
 
-           ; DMA-based input routine just like previous output routine. Also
-           ; transfers one byte per cycle so ten times standard rate.
+dodmainp:  glo     rf                  ; setup dma pointer to point
+           plo     r0                  ; to specified data buffer
+           ghi     rf
+           phi     r0
 
-dodmainp:  ghi     rf                  ; setup dma pointer to point
-           phi     r0                  ; to specified data buffer
-           glo     rf
-           plo     r0
+           adi     2                   ; update rf to account for transfer
+           phi     rf
 
            out     cf_addr             ; set sector counter for dma
            db      cf_count + 1        ; to one sector
@@ -609,10 +649,30 @@ dodmainp:  ghi     rf                  ; setup dma pointer to point
            out     cf_addr             ; enable dma for input
            db      cf_dmain            ; transfer will magically happen here
 
-setpoint:  ghi     r0                  ; update rf to point just past
-           phi     rf                  ; transferred data as some code
-           glo     r0                  ; such as the sys command relies
-           plo     rf                  ; on this behavior writing sectors
+           br      cfresume            ; check for errors
+
+           ; DMA input routine with fixup to save byte just past data buffer
+           ; and then restore it after since on hardware with slow DMAIN
+           ; latency an extra cycle will be run, transferring a garbage byte.
+           ; On output the drive doesn't seem to mind the extra cycle.
+
+dofixinp:  glo     rf                  ; setup dma pointer to point
+           plo     r0                  ; to specified data buffer
+           ghi     rf
+           phi     r0
+
+           adi     2                   ; update rf to account for transfer
+           phi     rf
+           ldn     rf                  ; save memory byte just past buffer
+
+           out     cf_addr             ; set sector counter for dma
+           db      cf_count + 1        ; to one sector
+
+           out     cf_addr             ; enable dma for input
+           db      cf_dmain            ; transfer will magically happen here
+
+           str     rf                  ; restore saved byte, done twice just
+           str     rf                  ;  as a no-op for timing reasons
 
            ; End of data transfer, check for errors and report as needed.
 
