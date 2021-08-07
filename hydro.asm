@@ -1,12 +1,18 @@
-; This software is copyright 2021 by David S. Madole.
-; You have permission to use, modify, copy, and distribute
-; this software so long as this copyright notice is retained.
-; This software may not be used in commercial applications
-; without express written permission from the author.
+
+;  Copyright 2021, David S. Madole <david@madole.net>
 ;
-; The author grants a license to Michael H. Riley to use this
-; code for any purpose he sees fit, including commercial use,
-; and without any need to include the above notice.
+;  This program is free software: you can redistribute it and/or modify
+;  it under the terms of the GNU General Public License as published by
+;  the Free Software Foundation, either version 3 of the License, or
+;  (at your option) any later version.
+;
+;  This program is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
            ; Include kernal API entry points
@@ -14,18 +20,18 @@
            include bios.inc
            include kernel.inc
 
-           ; Define non-published API elements
 
-version    equ     0400h
-himem      equ     0442h
+           ; Define non-published API elements
 
 d_ideread  equ     0447h
 d_idewrite equ     044ah
+
 
            ; Hardware port definitions
 
 #define    cf_addr 2
 #define    cf_data 3
+
 
            ; Bits in CF interface address port
 
@@ -33,6 +39,7 @@ cf_count   equ     80h                 ; dma sector count
 cf_dmout   equ     40h                 ; dma out enable
 cf_dmain   equ     20h                 ; dma in enable
 cf_inten   equ     10h                 ; interrupt enable
+
 
            ; IDE register addresses
 
@@ -48,6 +55,7 @@ ide_cmnd   equ     7
 ide_alts   equ     14
 ide_cont   equ     14
 
+
            ; Bits in IDE status register (address 7)
 
 ide_bsy    equ     80h                 ; busy
@@ -55,10 +63,12 @@ ide_rdy    equ     40h                 ; ready
 ide_drq    equ     08h                 ; data request
 ide_err    equ     01h                 ; error
 
+
            ; IDE command code values
 
 ide_read   equ     20h                 ; read sector
 ide_writ   equ     30h                 ; write sector
+
 
            ; Executable program header
 
@@ -67,110 +77,139 @@ ide_writ   equ     30h                 ; write sector
            dw      end-start
            dw      start
 
-start:     org     2000h
-           br      checkver
+start:     br      entry
+
 
            ; Build information
 
-           db      7+80h              ; month
-           db      20                 ; day
+           db      8+80h              ; month
+           db      6                  ; day
            dw      2021               ; year
-           dw      7                  ; build
-           db      'Written by David S. Madole',0
+           dw      0                  ; build
+
+           db      'See github.com/dmadole/Elfos-hydro for more info',0
 
 
-           ; Check minimum kernel version we need before doing anything else,
-           ; this version requires 0.4.0 for the heap manager, and the vectors
-           ; for o_read and o_write to replace the BIOS disk driver.
+           ; Check if hook points have already been patched and do not
+           ; install if so, since we don't know what it is or what the
+           ; impact might be of disconnecting it.
 
-checkver:  ldi     high k_ver         ; pointer to running version
-           phi     r8
-           ldi     low k_ver
-           plo     r8
+entry:     ldi     high patchpio      ; Get point to table of patch points
+           phi     rd
+           ldi     low patchpio
+           plo     rd
 
-           lda     r8
-           lbnz    allocmem
+chekloop   lda     rd                 ; a zero marks end of the table
+           lbz     chekvers
 
-           lda     r8
-           smi     4
-           lbnf    versfail
-
-
-           ; Allocate memory below from the heap for the driver code block,
-           ; leaving ; address to copy code into in register R8 and R9. This
-           ; is a brute-force way of dealing with the heap manager inability
-           ; to allocate aligned blocks, but it seems to work fine.
-
-allocmem:  ldi     high end-module
-           phi     rc
-           ldi     low end-module
-           plo     rc
-
-           ldi     0
-           phi     r7
-           ldi     4
-           plo     r7
-
-           lbr     doalloc
-
-alloclp:   sep     scall
-           dw      o_dealloc
-
-           inc     rc
-
-doalloc:   sep     scall
-           dw      o_alloc
-
-           glo     rf
-           lbnz    alloclp
-
-           glo     rf
-           plo     r8
-           plo     r9
-           ghi     rf
-           phi     r8
-           phi     r9
-
-           ; Copy the code of the persistent module to the memory block that
-           ; was just allocated. R8 and R9 both point to this block before
-           ; the copy. R9 will be used but R8 will still point to it after.
-
-           ldi     high end-module
-           phi     rf
-           ldi     low end-module
+           phi     rf                 ; get pointer to patch point
+           lda     rd
            plo     rf
 
-           ldi     high module        ; get source address to copy from
-           phi     ra
+           inc     rf                 ; skip the lbr opcode
+
+           ldn     rd                 ; if points into bios then ok
+           smi     0f8h
+           lbnf    cheknext
+
+           sep     scall              ; quit with error message
+           dw      o_inmsg
+           db      'ERROR: Read or write hooks already installed',13,10,0
+           sep     sret
+
+cheknext:  inc     rd                 ; skip target address in table
+           inc     rd
+
+           lbr     chekloop           ; repeat for all
+
+
+           ; Check minimum needed kernel version 0.4.0 in order to have
+           ; heap manager available.
+
+chekvers:  ldi     high k_ver         ; pointer to installed kernel version
+           phi     rd
+           ldi     low k_ver
+           plo     rd
+
+           lda     rd                 ; if major is non-zero then good
+           lbnz    allocmem
+
+           lda     rd                 ; if minor is 4 or more then good
+           smi     4
+           lbdf    allocmem
+
+           sep     scall              ; quit with error message
+           dw      o_inmsg
+           db      'ERROR: Needs kernel version 0.4.0 or higher',13,10,0
+           sep     sret
+
+
+           ; Allocate a page-aligned block from the heap for storage of
+           ; the persistent code module. Make it permanent so it will
+           ; not get cleaned up at program exit.
+
+allocmem:  ldi     high modend-module  ; length of persistent module
+           phi     rc
+           ldi     low modend-module
+           plo     rc
+
+           ldi     255                 ; page-aligned
+           phi     r7
+           ldi     4                   ; permanent
+           plo     r7
+
+           sep     scall               ; request memory block
+           dw      o_alloc
+           lbnf    gotalloc
+
+           sep     scall               ; return with error
+           dw      o_inmsg
+           db      'ERROR: Could not allocate memeory from heap',13,10,0
+           sep     sret
+
+gotalloc:  ghi     rf                  ; Offset to adjust addresses with
+           smi     high module
+           stxd
+
+
+           ; Copy module code into the permanent heap block
+
+           ldi     high modend-module  ; length of code to copy
+           phi     rc
+           ldi     low modend-module
+           plo     rc
+
+           ldi     high module         ; get source address
+           phi     rd
            ldi     low module
-           plo     ra
+           plo     rd
 
-copycode:  lda     ra                 ; copy code to destination address
-           str     r9
-           inc     r9
-           dec     rf
-           glo     rf
+copycode:  lda     rd                  ; copy code to destination address
+           str     rf
+           inc     rf
+           dec     rc
+           glo     rc
            lbnz    copycode
-           ghi     rf
+           ghi     rc
            lbnz    copycode
 
-           ; Update kernel and BIOS hooks to point to our module code. At
-           ; this point, R9 points to the new BIOS jump table in RAM, and
-           ; R8 points to the base address of the module code in RAM.
+
+           ; Output banner message
 
            sep     scall
            dw      o_inmsg
-           db      'Hydro IDE Driver Build 7 for Elf/OS',13,10,0
+           db      'Hydro IDE Driver Build 0 for Elf/OS',13,10,0
+
 
            ; Test if DMA is supported by trying a DMA operation and seeing
            ; if R0 changes. Also test for high DMAIN latency that causes
            ; an extra DMA cycle by seeing if the transfer is not 512 bytes.
-           ; On hardware with slow DMAIN and extra byte will be transferred.
+           ; On hardware with slow DMAIN an extra byte will be transferred.
            ; For simplicity, we don't actually read disk contents, rather we
            ; just DMAIN the sector count buffer of the drive over and over.
 
-           ldi     255                ; run test 255 times to make sure that
-           plo     re                 ;  dmain isn't on the edge of being ok
+           ldi     0                  ; run test 256 times to make sure that
+           plo     rc                 ;  dmain isn't on the edge of being ok
 
 dmatest:   ldi     high buffer        ; setup dma buffer pointer
            phi     r0
@@ -188,23 +227,24 @@ dmatest:   ldi     high buffer        ; setup dma buffer pointer
            sex     r2                 ; switch back to r2
  
            glo     r0                 ; if r0.0 is not equal to the starting
-           smi     low buffer           ;  value still, we did the wrong count,
+           smi     low buffer         ;  value still, we did the wrong count,
            lbnz    fixupdma           ;  we want to use the fixup routine
 
-           dec     re                 ; loop the full 255 tests
-           glo     re
+           dec     rc                 ; loop the full 255 tests
+           glo     rc
            bnz     dmatest
 
            ghi     r0                 ; if r0.0 was right on all, then check
            smi     high buffer        ;  if r0.1 even changed, if not then
            lbnz    intisdma           ;  this hardware doesn't support dma
 
+
            ; Patch BIOS to point to PIO disk routines
 
            ldi     high patchpio      ; Get point to table of patch points
-           phi     r7
+           phi     rd
            ldi     low patchpio
-           plo     r7
+           plo     rd
 
            sep     scall
            dw      o_inmsg
@@ -212,12 +252,13 @@ dmatest:   ldi     high buffer        ; setup dma buffer pointer
 
            lbr     setpatch
 
+
            ; Patch BIOS to point to DMA disk routines with fixup code
 
 fixupdma:  ldi     high patchfix     ; Get point to table of patch points
-           phi     r7
+           phi     rd
            ldi     low patchfix
-           plo     r7
+           plo     rd
 
            sep     scall
            dw      o_inmsg
@@ -225,69 +266,62 @@ fixupdma:  ldi     high patchfix     ; Get point to table of patch points
 
            lbr     setpatch
 
+
            ; Patch BIOS to point to normal DMA disk routines
 
 intisdma:  ldi     high patchdma     ; Get point to table of patch points
-           phi     r7
+           phi     rd
            ldi     low patchdma
-           plo     r7
+           plo     rd
 
            sep     scall
            dw      o_inmsg
            db      'Installing DMA mode',13,10,0
 
-setpatch:  sex     r7                 ; add instructions will use table
 
-ptchloop:  lda     r7                 ; a zero marks end of the table
-           lbz     return
+           ; Update kernel hooks to point to the copied module code
 
-           phi     ra                 ; save msb of address but check if
-           lda     r7                 ; get lsb of patch address
-           plo     ra
+setpatch:  inc     r2                 ; point to page offset on stack
 
-           inc     ra                 ; skip the lbr opcode
+hookloop:  lda     rd                 ; a zero marks end of the table
+           lbz     finished
 
-           inc     r7                 ; point to lsb of both addresses
-           inc     ra
-           glo     r8                 ; add the offset in the table to the
-           add                        ; base address in RAM and update the
-           str     ra                 ; address at the patch point
+           phi     rf                 ; get pointer to vector to hook
+           lda     rd
+           plo     rf
 
-           dec     r7                 ; point to msb of both addresses
-           dec     ra
-           ghi     r8                 ; same as above for the msb
-           adc
-           str     ra
+           inc     rf                 ; skip the lbr opcode
 
-           inc     r7                 ; point to next entry in table and
-           inc     r7                 ; continue until all are done
-           lbr     ptchloop
+           lda     rd                 ; add offset to get copy address
+           add                        ;  and update into vector
+           str     rf
+           inc     rf
+           lda     rd
+           str     rf
 
-return:    sep     sret
+           lbr     hookloop           ; repeat for all
 
-           ; Output failure messsages if problems installing
 
-versfail:  sep     scall
-           dw      o_inmsg
-           db      'ERROR: Needs kernel version 0.4.0 or higher',13,10,0
+           ; All done, exit to operating system
 
-           sep     sret
+finished:  sep     sret
 
 
            ; Table giving addresses of jump vectors we need to update, along
            ; with offset from the start of the module to repoint those to.
 
-patchpio:  dw      d_ideread, pioread - module
-           dw      d_idewrite, piowrite - module
+patchpio:  dw      d_ideread, pioread
+           dw      d_idewrite, piowrite
            db      0
 
-patchdma:  dw      d_ideread, dmaread - module
-           dw      d_idewrite, dmawrite - module
+patchdma:  dw      d_ideread, dmaread
+           dw      d_idewrite, dmawrite
            db      0
 
-patchfix:  dw      d_ideread, fixread - module
-           dw      d_idewrite, dmawrite - module
+patchfix:  dw      d_ideread, fixread
+           dw      d_idewrite, dmawrite
            db      0
+
 
            org     $ + 0ffh & 0ff00h
 
@@ -548,7 +582,9 @@ cfreturn:  adi     255                 ; if d=0 set df=0, if d>0 set df=1
 cfpopret:  inc     r2
            br      cfreturn
 
-end:       ; That's all folks!
+modend:    ; This is the last of what's copied to the heap.
 
 buffer:    ds      512
+
+end:       ; That's all folks!
 
