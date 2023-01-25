@@ -15,318 +15,332 @@
 ;  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-           ; Include kernal API entry points
+          ; Include kernal API entry points
 
-           include bios.inc
-           include kernel.inc
+            #include include/bios.inc
+            #include include/kernel.inc
 
 
-           ; Define non-published API elements
+          ; Define non-published API elements
 
-d_ideread  equ     0447h
-d_idewrite equ     044ah
+d_ideread:  equ   0447h
+d_idewrite: equ   044ah
 
 
-           ; Hardware port definitions
+          ; Hardware port definitions
 
-#define    cf_addr 2
-#define    cf_data 3
+#define EXP_PORT     5                  ; group i/o expander port
+#define IDE_GROUP    0                  ; ide interface group
+#define IDE_SELECT   2                  ; ide interface address port
+#define IDE_DATA     3                  ; ide interface data port
 
 
-           ; Bits in CF interface address port
+            ; Bits in CF interface address port
 
-cf_count   equ     80h                 ; dma sector count
-cf_dmout   equ     40h                 ; dma out enable
-cf_dmain   equ     20h                 ; dma in enable
-cf_inten   equ     10h                 ; interrupt enable
+#define IDE_A_COUNT 80h                 ; dma sector count
+#define IDE_A_DMOUT 40h                 ; dma out enable
+#define IDE_A_DMAIN 20h                 ; dma in enable
+#define IDE_A_STOP  00h                 ; dma in enable
 
 
-           ; IDE register addresses
+            ; IDE register addresses
 
-ide_data   equ     0
-ide_erro   equ     1
-ide_coun   equ     2
-ide_sect   equ     3
-ide_cyll   equ     4
-ide_cylh   equ     5
-ide_head   equ     6
-ide_stat   equ     7
-ide_cmnd   equ     7
-ide_alts   equ     14
-ide_cont   equ     14
+#define IDE_R_DATA  00h
+#define IDE_R_ERROR 01h
+#define IDE_R_FEAT  01h
+#define IDE_R_COUNT 02h
+#define IDE_R_SECT  03h
+#define IDE_R_CYLLO 04h
+#define IDE_R_CYLHI 05h
+#define IDE_R_HEAD  06h
+#define IDE_R_STAT  07h
+#define IDE_R_CMND  07h
 
 
-           ; Bits in IDE status register (address 7)
+            ; Bits in IDE status register
 
-ide_bsy    equ     80h                 ; busy
-ide_rdy    equ     40h                 ; ready
-ide_drq    equ     08h                 ; data request
-ide_err    equ     01h                 ; error
+#define IDE_S_BUSY  80h                 ; busy
+#define IDE_S_RDY   40h                 ; ready
+#define IDE_S_DRQ   08h                 ; data request
+#define IDE_S_ERR   01h                 ; error
 
 
-           ; IDE command code values
+            ; IDE head register bits
 
-ide_read   equ     20h                 ; read sector
-ide_writ   equ     30h                 ; write sector
+#define IDE_H_DR0   000h
+#define IDE_H_DR1   010h
+#define IDE_H_CHS   0a0h
+#define IDE_H_LBA   0e0h
 
 
-           ; Executable program header
+            ; IDE command code values
 
-           org     2000h - 6
-           dw      start
-           dw      end-start
-           dw      start
+#define IDE_C_READ  20h                 ; read sector
+#define IDE_C_WRITE 30h                 ; write sector
+#define IDE_C_FEAT  0efh                ; set feature
 
-start:     br      entry
 
+            ; IDE features
 
-           ; Build information
+#define IDE_F_8BIT  01h                 ; 8-bit mode
 
-           db      8+80h              ; month
-           db      6                  ; day
-           dw      2021               ; year
-           dw      0                  ; build
 
-           db      'See github.com/dmadole/Elfos-hydro for more info',0
+          ; Executable program header
 
+            org   2000h - 6
+            dw    start
+            dw    end-start
+            dw    start
 
-           ; Check if hook points have already been patched and do not
-           ; install if so, since we don't know what it is or what the
-           ; impact might be of disconnecting it.
+start:      br    entry
 
-entry:     ldi     high patchpio      ; Get point to table of patch points
-           phi     rd
-           ldi     low patchpio
-           plo     rd
 
-chekloop   lda     rd                 ; a zero marks end of the table
-           lbz     chekvers
+          ; Build information
 
-           phi     rf                 ; get pointer to patch point
-           lda     rd
-           plo     rf
+            db    1+80h                 ; month
+            db    23                    ; day
+            dw    2023                  ; year
+            dw    9                     ; build
 
-           inc     rf                 ; skip the lbr opcode
+            db    'See github.com/dmadole/Elfos-hydro for more info',0
 
-           ldn     rd                 ; if points into bios then ok
-           smi     0f8h
-           lbnf    cheknext
 
-           sep     scall              ; quit with error message
-           dw      o_inmsg
-           db      'ERROR: Read or write hooks already installed',13,10,0
-           sep     sret
+          ; Check if hook points have already been patched and do not
+          ; install if so, since we don't know what it is or what the
+          ; impact might be of disconnecting it.
 
-cheknext:  inc     rd                 ; skip target address in table
-           inc     rd
+entry:      ldi   high patchtbl         ; Get point to table of patch points
+            phi   rd
+            ldi   low patchtbl
+            plo   rd
 
-           lbr     chekloop           ; repeat for all
+chekloop:   lda   rd                    ; a zero marks end of the table
+            lbz   chekvers
 
+            phi   rf                    ; get pointer to patch point
+            lda   rd
+            plo   rf
 
-           ; Check minimum needed kernel version 0.4.0 in order to have
-           ; heap manager available.
+            inc   rf                    ; skip the lbr opcode
 
-chekvers:  ldi     high k_ver         ; pointer to installed kernel version
-           phi     rd
-           ldi     low k_ver
-           plo     rd
+            ldn   rd                    ; if points into bios then ok
+            smi   0f8h
+            lbnf  cheknext
 
-           lda     rd                 ; if major is non-zero then good
-           lbnz    allocmem
+            sep   scall                 ; quit with error message
+            dw    o_inmsg
+            db    'ERROR: Read or write hooks already installed',13,10,0
+            sep   sret
 
-           lda     rd                 ; if minor is 4 or more then good
-           smi     4
-           lbdf    allocmem
+cheknext:   inc   rd                    ; skip target address in table
+            inc   rd
 
-           sep     scall              ; quit with error message
-           dw      o_inmsg
-           db      'ERROR: Needs kernel version 0.4.0 or higher',13,10,0
-           sep     sret
+            lbr   chekloop              ; repeat for all
 
 
-           ; Allocate a page-aligned block from the heap for storage of
-           ; the persistent code module. Make it permanent so it will
-           ; not get cleaned up at program exit.
+          ; Check minimum needed kernel version 0.4.0 in order to have
+          ; heap manager available.
 
-allocmem:  ldi     high modend-module  ; length of persistent module
-           phi     rc
-           ldi     low modend-module
-           plo     rc
+chekvers:   ldi   high k_ver            ; pointer to installed kernel version
+            phi   rd
+            ldi   low k_ver
+            plo   rd
 
-           ldi     255                 ; page-aligned
-           phi     r7
-           ldi     4                   ; permanent
-           plo     r7
+            lda   rd                    ; if major is non-zero then good
+            lbnz  dmatest
 
-           sep     scall               ; request memory block
-           dw      o_alloc
-           lbnf    gotalloc
+            lda   rd                    ; if minor is 4 or more then good
+            smi   4
+            lbdf  dmatest
 
-           sep     scall               ; return with error
-           dw      o_inmsg
-           db      'ERROR: Could not allocate memeory from heap',13,10,0
-           sep     sret
+            sep   scall                 ; quit with error message
+            dw    o_inmsg
+            db    'ERROR: Needs kernel version 0.4.0 or higher',13,10,0
+            sep   sret
 
-gotalloc:  ghi     rf                  ; Offset to adjust addresses with
-           smi     high module
-           stxd
 
+          ; Test if DMA is supported by trying a DMA operation and seeing if
+          ; R0 changes. For simplicity, we don't actually read disk contents,
+          ; rather we just DMAIN from the sector count register of the drive.
 
-           ; Copy module code into the permanent heap block
+dmatest:    ldi   high buffer           ; setup dma buffer pointer
+            phi   r0
+            ldi   low buffer
+            plo   r0
 
-           ldi     high modend-module  ; length of code to copy
-           phi     rc
-           ldi     low modend-module
-           plo     rc
+            sex   r3                    ; set one sector to transfer
+            out   IDE_SELECT
+            db    IDE_A_COUNT + 1
 
-           ldi     high module         ; get source address
-           phi     rd
-           ldi     low module
-           plo     rd
+            out   IDE_SELECT            ; enable dma in of count register
+            db    IDE_A_DMAIN + IDE_R_COUNT
 
-copycode:  lda     rd                  ; copy code to destination address
-           str     rf
-           inc     rf
-           dec     rc
-           glo     rc
-           lbnz    copycode
-           ghi     rc
-           lbnz    copycode
+            sex   r2                    ; delay while dma completes
+            sex   r2
 
+            ghi   r0                    ; check if r0.1 changed to know if
+            smi   high buffer           ;  dma happened
+            lbnz  intisdma
 
-           ; Output banner message
 
-           sep     scall
-           dw      o_inmsg
-           db      'Hydro IDE Driver Build 0 for Elf/OS',13,10,0
 
 
-           ; Test if DMA is supported by trying a DMA operation and seeing
-           ; if R0 changes. Also test for high DMAIN latency that causes
-           ; an extra DMA cycle by seeing if the transfer is not 512 bytes.
-           ; On hardware with slow DMAIN an extra byte will be transferred.
-           ; For simplicity, we don't actually read disk contents, rather we
-           ; just DMAIN the sector count buffer of the drive over and over.
+            ldi   pioend.0              ; get length of module
+            plo   rc
 
-           ldi     0                  ; run test 256 times to make sure that
-           plo     rc                 ;  dmain isn't on the edge of being ok
+            ldi   piostart.1            ; get page of module
+            phi   rd
 
-dmatest:   ldi     high buffer        ; setup dma buffer pointer
-           phi     r0
-           ldi     low buffer
-           plo     r0
+            ldi   piomesg.1
+            phi   r9
+            ldi   piomesg.0
+            plo   r9
 
-           sex     r3                 ; use inline arguments
+            lbr   allocmem
 
-           out     cf_addr            ; set one sector to transfer
-           db      cf_count + 1
 
-           out     cf_addr            ; enable dma in of count register
-           db      cf_dmain + ide_coun
+piomesg:    db    'Installing PIO mode',13,10,0
+dmamesg:    db    'Installing DMA mode',13,10,0
 
-           sex     r2                 ; switch back to r2
- 
-           glo     r0                 ; if r0.0 is not equal to the starting
-           smi     low buffer         ;  value still, we did the wrong count,
-           lbnz    fixupdma           ;  we want to use the fixup routine
 
-           dec     rc                 ; loop the full 255 tests
-           glo     rc
-           bnz     dmatest
+          ; Patch BIOS to point to normal DMA disk routines
 
-           ghi     r0                 ; if r0.0 was right on all, then check
-           smi     high buffer        ;  if r0.1 even changed, if not then
-           lbnz    intisdma           ;  this hardware doesn't support dma
+intisdma:   ldi   dmaend.0              ; get length of module
+            plo   rc
 
+            ldi   dmastart.1            ; get page of module
+            phi   rd
 
-           ; Patch BIOS to point to PIO disk routines
+            ldi   dmamesg.1
+            phi   r9
+            ldi   dmamesg.0
+            plo   r9
 
-           ldi     high patchpio      ; Get point to table of patch points
-           phi     rd
-           ldi     low patchpio
-           plo     rd
 
-           sep     scall
-           dw      o_inmsg
-           db      'Installing PIO mode',13,10,0
+          ; Allocate a page-aligned block from the heap for storage of
+          ; the persistent code module. Make it permanent so it will
+          ; not get cleaned up at program exit.
 
-           lbr     setpatch
+allocmem:   ldi   0                     ; length of module in rc
+            phi   rc
 
+            ldi   255                   ; page-aligned
+            phi   r7
+            ldi   4+64                  ; permanent and named
+            plo   r7
 
-           ; Patch BIOS to point to DMA disk routines with fixup code
+            sep   scall                 ; request memory block
+            dw    o_alloc
+            lbnf  gotalloc
 
-fixupdma:  ldi     high patchfix     ; Get point to table of patch points
-           phi     rd
-           ldi     low patchfix
-           plo     rd
+            sep   scall                 ; return with error
+            dw    o_inmsg
+            db    'ERROR: Could not allocate memeory from heap',13,10,0
+            sep   sret
 
-           sep     scall
-           dw      o_inmsg
-           db      'Installing DMA mode (with overclock fix)',13,10,0
+gotalloc:   ghi   rf                    ; Offset to adjust addresses with
+            smi   high module
+            stxd
 
-           lbr     setpatch
 
+          ; Copy common module code into the permanent heap block
 
-           ; Patch BIOS to point to normal DMA disk routines
+            ldi   modend.0              ; length of code to copy
+            plo   re
 
-intisdma:  ldi     high patchdma     ; Get point to table of patch points
-           phi     rd
-           ldi     low patchdma
-           plo     rd
+            ldi   module.1              ; get source address
+            phi   rb
+            ldi   module.0
+            plo   rb
 
-           sep     scall
-           dw      o_inmsg
-           db      'Installing DMA mode',13,10,0
+copymod:    lda   rb                    ; copy code to destination address
+            str   rf
+            inc   rf
+            dec   rc
+            dec   re
+            glo   re
+            lbnz  copymod
 
 
-           ; Update kernel hooks to point to the copied module code
+          ; Copy mode-specific module code into the permanent heap block
 
-setpatch:  inc     r2                 ; point to page offset on stack
+            ldi   modend.0
+            plo   rd
 
-hookloop:  lda     rd                 ; a zero marks end of the table
-           lbz     finished
+copyext:    lda   rd                    ; copy code to destination address
+            str   rf
+            inc   rf
+            dec   rc
+            glo   rc
+            lbnz  copyext
 
-           phi     rf                 ; get pointer to vector to hook
-           lda     rd
-           plo     rf
 
-           inc     rf                 ; skip the lbr opcode
+         ; Output banner message
 
-           lda     rd                 ; add offset to get copy address
-           add                        ;  and update into vector
-           str     rf
-           inc     rf
-           lda     rd
-           str     rf
+            sep   scall
+            dw    o_inmsg
+            db    'Hydro IDE Driver Build 9 for Elf/OS',13,10,0
 
-           lbr     hookloop           ; repeat for all
+            ghi   r9
+            phi   rf
+            glo   r9
+            plo   rf
 
+            sep   scall
+            dw    o_msg
 
-           ; All done, exit to operating system
 
-finished:  sep     sret
+          ; Update kernel hooks to point to the copied module code
 
+            inc   r2                    ; point to page offset on stack
 
-           ; Table giving addresses of jump vectors we need to update, along
-           ; with offset from the start of the module to repoint those to.
+            ldi   high patchtbl         ; Get point to table of patch points
+            phi   rd
+            ldi   low patchtbl
+            plo   rd
 
-patchpio:  dw      d_ideread, pioread
-           dw      d_idewrite, piowrite
-           db      0
+hookloop:   lda   rd                    ; a zero marks end of the table
+            lbz   finished
 
-patchdma:  dw      d_ideread, dmaread
-           dw      d_idewrite, dmawrite
-           db      0
+            phi   rf                    ; get pointer to vector to hook
+            lda   rd
+            plo   rf
 
-patchfix:  dw      d_ideread, fixread
-           dw      d_idewrite, dmawrite
-           db      0
+            inc   rf                    ; skip the lbr opcode
 
+            lda   rd                    ; add offset to get copy address
+            add                         ;  and update into vector
+            str   rf
+            inc   rf
+            lda   rd
+            str   rf
 
-           org     $ + 0ffh & 0ff00h
+            lbr   hookloop              ; repeat for all
 
-module:    ; Start the actual module code on a new page so that it forms
-           ; a block of page-relocatable code that will be copied to himem.
+
+          ; All done, exit to operating system
+
+finished:   ldi   0e1h
+            phi   r8
+
+            sep   scall
+            dw    cfreset
+
+            sep   sret
+
+
+          ; Table giving addresses of jump vectors we need to update, along
+          ; with offset from the start of the module to repoint those to.
+
+patchtbl:   dw    d_ideread, dmaread
+            dw    d_idewrite, dmawrite
+            db    0
+
+
+            org   $ + 0ffh & 0ff00h
+
+module:   ; Start the actual module code on a new page so that it forms
+          ; a block of page-relocatable code that will be copied to himem.
 
 
 ; When the interface is DMA-driven, read and write are identical operations,
@@ -351,240 +365,360 @@ module:    ; Start the actual module code on a new page so that it forms
 ; 
 ; ## Not documented but important as some Elf/OS code assumes this behavior.
 
+cfreset:    sex   r3
 
-piowrite:  ldi     low dopioout        ; address of polled output routine
-           br      writecmd
+          #if IDE_GROUP
+            out   EXP_PORT              ; set ide expander group
+            db    IDE_GROUP
+          #endif
 
-pioread:   ldi     low dopioinp        ; address of polled input routine
-           br      readcmd
+            glo   r3
+            br    waitbsy
 
-fixread:   ldi     low dofixinp        ; address of fix-up dma input routine
-           br      readcmd
+            glo   r3
+            br    drivrdy
+            bdf   return
 
-dmawrite:  ldi     low dodmaout        ; address of dma output routine
-writecmd:  plo     re
+            sex   r3                     ; enable feature 8 bit mode
+            out   IDE_SELECT
+            db    IDE_R_FEAT
+            out   IDE_DATA
+            db    IDE_F_8BIT
 
-           ldi     ide_writ            ; write sector command
-           br      cfblock
+            out   IDE_SELECT            ; send set feature command
+            db    IDE_R_CMND
+            out   IDE_DATA
+            db    IDE_C_FEAT
 
-dmaread:   ldi     low dodmainp        ; address of dma input routine
-readcmd:   plo     re
+waitret:    glo   r3
+            br    waitbsy
 
-           ldi     ide_read            ; read sector command
-cfblock:   stxd
+            glo   r3
+            br    waitrdy
+            bdf   return
 
-           sex     r3                  ; use inline data value
-           out     cf_addr             ; output to address port
-           db      ide_stat            ; select status register
+            ldn   r2
+            shr
+return:
+          #if IDE_GROUP
+            sex   r3
+            out   EXP_PORT              ; leave as default group
+            db    NO_GROUP
+          #endif
 
-           sex     r2                  ; use stack for input
-           inp     cf_data             ; read status register
-           xri     ide_rdy             ; invert state of RDY bit
-           ani     ide_bsy + ide_rdy   ; test BSY and RDY bits only
-           bnz     cfpopret            ; error if BSY set or RDY clear
+            sep   sret
 
-           ldi     ide_cmnd            ; command register
-           stxd
 
-           ghi     r8                  ; device number
-           stxd
-           ldi     ide_head            ; device and head register
-           stxd
 
-           glo     r8                  ; high byte of lba
-           stxd
-           ldi     ide_cylh            ; high cylinder byte register
-           stxd
 
-           ghi     r7                  ; middle byte of lba
-           stxd
-           ldi     ide_cyll            ; low cylinder byte register
-           stxd
+          ; Subroutine to check if its safe to access registers by waiting
+          ; for the ready bit cleared in the status register. On the Pico/Elf
+          ; the value of the INP instruction that is deposited in D is not
+          ; reliable, so use the data written to memory at M(RX) instead.
 
-           glo     r7                  ; low byte of lba
-           stxd
-           ldi     ide_sect            ; sector number register
-           stxd
+waitbsy:    adi   2                     ; get return address
+            plo   re
 
-           ldi     1                   ; transfer one sector
-           stxd
-           ldi     ide_coun            ; sector count register
-           str     r2
+            sex   r3                    ; select status register
+            out   IDE_SELECT
+            db    IDE_R_STAT
 
-           out     cf_addr
-           out     cf_data
+            sex   r2
+bsyloop:    inp   IDE_DATA              ; get register, read from memory
+            ldx                         ;  not from d register, important
+            ani   IDE_S_BUSY
+            bnz   bsyloop
 
-           out     cf_addr
-           out     cf_data
+            glo   re                    ; return
+            plo   r3
 
-           out     cf_addr
-           out     cf_data
 
-           out     cf_addr
-           out     cf_data
+          ; Subroutine to select the appropriate drive and then wait for the
+          ; ready bit to be set by juming into WAITRDY afterwards.
 
-           out     cf_addr
-           out     cf_data
+drivrdy:    adi   2                     ; get return address
+            plo   re
 
-           out     cf_addr
-           out     cf_data
+            ghi   r8                    ; error if drive number is greater
+            ani   31                    ;  than one, else put it into df
+            shr
+            bnz   waiterr
 
-           dec     r2
+            sex   r3
+            out   IDE_SELECT            ; select head, jump based on drive
+            db    IDE_R_HEAD
+            bdf   drive1
 
-cfready:   inp     cf_data             ; read status register
-           ani     ide_bsy             ; check if BSY set
-           bnz     cfready             ; wait until its not
+            out   IDE_DATA              ; select drive zero, jump to wait
+            db    IDE_H_LBA+IDE_H_DR0   ;  for ready bit
+            br    statsel
 
-           ldn     r2                  ; get status value
-           ani     ide_drq + ide_err   ; check if ERR or DRQ set
-           bz      cfready             ; wait until either is
+drive1:     out   IDE_DATA              ; select drive one, jump to wait
+            db    IDE_H_LBA+IDE_H_DR1   ;  for ready bit
+            br    statsel
 
-           ani     ide_err             ; check if ERR is set
-           bnz     cfreturn            ; jump if ERR is set
 
-           sex     r3                  ; out from inline values
-           glo     re                  ; get address of i/o routine
-           plo     r3                  ; jump to routine address
+          ; Subroutine to wait for ready bit set on current drive. See the
+          ; note under WAITBSY regarding INP of the status register.
+
+waitrdy:    adi   2                     ; get return address
+            plo   re
+
+            sex   r3
+statsel:    out   IDE_SELECT            ; select status register
+            db    IDE_R_STAT
+
+            sex   r2                    ; input to stack
+
+rdyloop:    inp   IDE_DATA              ; if status register is zero,
+            ldx                         ;  second drive is not present
+            bz    waiterr
+
+            ani   IDE_S_RDY             ; wait until rdy bit is set
+            bz    rdyloop
+
+            adi   0                     ; return success
+            glo   re
+            plo   r3
+
+waiterr:    smi   0                     ; return failure
+            glo   re
+            plo   r3
+
+
+          ; Disk read and write share mostly common code, there is just a
+          ; difference in two varaibles: what command to send to the drive
+          ; and what DMA direction to enable for the transfer. So we just
+          ; set these onto the stack appropriately before the routine.
+          ;
+          ; There are two different write entry points, one for PIO for
+          ; Pico/Elf or other hardware that does not support DMA, and one
+          ; for 1802/Mini using DMA.
+
+
+
+
+            ; Setup read or write operation on drive.
+
+ideblock:   stxd                        ; save command value
+
+            glo   r3                    ; wait until not busy
+            br    waitbsy
+
+            glo   r3                    ; wait until drive ready, error if
+            br    drivrdy               ;  drive is not present
+            bnf   isready
+
+            inc   r2                    ; discard command and code address
+            inc   r2                    ;  and return failure
+            br    return
+
+isready:    sex   r3                    ; set sector count to one
+            out   IDE_SELECT
+            db    IDE_R_COUNT
+            out   IDE_DATA
+            db    1
+
+            out   IDE_SELECT            ; select lba low byte register
+            db    IDE_R_SECT
+
+            sex   r2                    ; push the lba high and middle
+            glo   r8                    ;  bytes onto the stack
+            stxd
+            ghi   r7
+            stxd
+
+            glo   r7                    ; set lba low byte (r7.0)
+            str   r2
+            out   IDE_DATA
+
+            sex   r3                    ; set lba middle byte (r7.1)
+            out   IDE_SELECT
+            db    IDE_R_CYLLO
+            sex   r2
+            out   IDE_DATA
+
+            sex   r3                    ; set lha high byte (r8.0)
+            out   IDE_SELECT
+            db    IDE_R_CYLHI
+            sex   r2
+            out   IDE_DATA
+
+            sex   r3                     ; execute read or write command
+            out   IDE_SELECT
+            db    IDE_R_CMND
+            sex   r2
+            out   IDE_DATA
+
+            dec   r2                    ; make room for input value
+
+drvbusy:    inp   IDE_DATA              ; wait until drive not busy, read
+            ldx                         ;  from memory, not from d
+            ani   IDE_S_BUSY
+            bnz   drvbusy
+
+            ldx                         ; wait until drq or err is set
+            ani   IDE_S_DRQ+IDE_S_ERR
+            bz    drvbusy
+
+            inc   r2                    ; discard status register value,
+            shr                         ;  return error if err bit set
+            bdf   return
+
+            ldn   r2                    ; jump to dmawrt or dmaread
+            plo   r3
+
+modend:     ; end of the base module
+
+dmastart:   ; start of the dma module
+
+dmaread:    ldi   dodmard.0             ; address of dma input routine
+            stxd
+            ldi   IDE_C_READ            ; read sector command
+            br    ideblock
+
+dmawrite:   ldi   dodmawr.0             ; address of dma output routine
+            stxd
+            ldi   IDE_C_WRITE           ; write sector command
+            br    ideblock
+
+dodmawr:    glo   rf                    ; set dma pointer to data buffer
+            plo   r0
+            ghi   rf
+            phi   r0
+
+            adi   2                     ; advance buffer pointer past end
+            phi   rf
+
+            sex   r3                    ; set dma count to one sector
+            out   IDE_SELECT
+            db    IDE_A_COUNT+1
+
+            out   IDE_SELECT
+            db    IDE_A_DMOUT
+
+            br    waitret
+
+dodmard:    glo   rf                    ; set dma pointer to data buffer
+            plo   r0
+            str   r2                    ; put lsb on stack for compare later
+            ghi   rf
+            phi   r0
+
+            adi   2                     ; advance buffer pointer past end
+            phi   rf
+
+            sex   r3                    ; set dma count to one sector
+            out   IDE_SELECT
+            db    IDE_A_COUNT+1
+
+            ldn   rf                    ; save byte just past end of buffer
+            plo   re
+
+            out   IDE_SELECT            ; start dma input operation
+            db    IDE_A_DMAIN
+
+            sex   r2                    ; extra instruction for timing
+            sex   r2
+
+            glo   r0                    ; if no dma overrun, complete
+            sm
+            bz    waitret
+
+            glo   re                    ; fix overrun byte, then complete
+            str   rf
+            br    waitret
+
+            db    0,'Hydro',0           ; label for minfo
+
+dmaend:   ; Last of dma-based module code
+
+            db    0,0,0,0               ; padding if alloc returns excess
+
+            org   dmastart+100h
+
+piostart:   ; start of the pio module
 
            ; Polled input routines for non-DMA operation unrolls the input
            ; loop by a factor of 8 to reduce loop overhead and increase speed
-           ; by 2x for reads and 3x for writes over standard BIOS driver.
+           ; by over 2x for reads and 3x for writes over BIOS driver.
 
-dopioinp:  out     cf_addr             ; select data register
-           db      ide_data
+pioread:    ldi   dopiord.0             ; address of polled input routine
+            stxd
+            ldi   IDE_C_READ            ; read sector command
+            br    ideblock+100h
 
-           ldi     512/8               ; count for number of loops
-           plo     re                  ; loop in unrolled by factor of 8
-           sex     rf                  ; input to buffer
+piowrite:   ldi   dopiowr.0             ; address of polled output routine
+            stxd
+            ldi   IDE_C_WRITE           ; write sector command
+            br    ideblock+100h
 
-inploop:   inp     cf_data             ; input bytes from data port into
-           inc     rf                  ; buffer and increment pointer
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
-           inp     cf_data
-           inc     rf
+dopiord:    sex   r3
 
-           dec     re                  ; loop until all transferred
-           glo     re
-           bnz     inploop
+            out   IDE_SELECT          ; select data register
+            db    IDE_R_DATA 
 
-           sex     r3                  ; reset to inline data values
-           br      cfresume            ; check for error
+            ldi   512/8               ; count for number of loops
+            plo   re                  ; loop in unrolled by factor of 8
 
-dopioout:  out     cf_addr             ; select data register
-           db      ide_data
+            sex   rf
+rdloop:     inp   IDE_DATA            ; input bytes from data port into
+            inc   rf                  ; buffer and increment pointer
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
+            inp   IDE_DATA
+            inc   rf
 
-           ldi     512/8               ; count for number of loops
-           plo     re                  ; loop in unrolled by factor of 8
-           sex     rf                  ; input to buffer
+            dec   re                    ; loop until all transferred
+            glo   re
+            bnz   rdloop
 
-outloop:   out     cf_data             ; output bytes to data port
-           out     cf_data             ; pointer will auto increment
-           out     cf_data
-           out     cf_data
-           out     cf_data
-           out     cf_data
-           out     cf_data
-           out     cf_data
+            br    waitret+100h          ; check for error
 
-           dec     re                  ; loop until all transferred
-           glo     re
-           bnz     outloop
 
-           sex     r3                  ; reset to inline data values
-           br      cfresume            ; check for error
+dopiowr:    sex   r3
 
-           ; DMA-based input driver works on 1802/Mini adapter and run at
-           ; approximately ten times the transfer rate of the standard BIOS
-           ; driver. Needs to use R0 as DMA memory pointer.
+            out   IDE_SELECT            ; select data register
+            db    IDE_R_DATA
 
-dodmaout:  glo     rf                  ; setup dma pointer to point
-           plo     r0                  ; to specified data buffer
-           ghi     rf
-           phi     r0
+            ldi   512/8                 ; count for number of loops
+            plo   re                    ; loop in unrolled by factor of 8
 
-           adi     2                   ; update rf to account for transfer
-           phi     rf
+            sex   rf
+wrloop:     out   IDE_DATA              ; output bytes to data port
+            out   IDE_DATA              ; pointer will auto increment
+            out   IDE_DATA
+            out   IDE_DATA
+            out   IDE_DATA
+            out   IDE_DATA
+            out   IDE_DATA
+            out   IDE_DATA
 
-           out     cf_addr             ; set sector counter for dma
-           db      cf_count + 1        ; to one sector
+            dec   re                    ; loop until all transferred
+            glo   re
+            bnz   wrloop
 
-           out     cf_addr             ; enable dma for output
-           db      cf_dmout            ; transfer will magically happen here
+            br    waitret+100h          ; check for error
 
-           br      cfresume            ; check for errors
 
-dodmainp:  glo     rf                  ; setup dma pointer to point
-           plo     r0                  ; to specified data buffer
-           ghi     rf
-           phi     r0
+            db    0,'Hydro',0           ; label for minfo
 
-           adi     2                   ; update rf to account for transfer
-           phi     rf
+pioend:   ; Last of pio-based module code
 
-           out     cf_addr             ; set sector counter for dma
-           db      cf_count + 1        ; to one sector
+            db    0,0,0,0               ; padding if alloc returns excess
 
-           out     cf_addr             ; enable dma for input
-           db      cf_dmain            ; transfer will magically happen here
 
-           br      cfresume            ; check for errors
+buffer:     ds      512
 
-           ; DMA input routine with fixup to save byte just past data buffer
-           ; and then restore it after since on hardware with slow DMAIN
-           ; latency an extra cycle will be run, transferring a garbage byte.
-           ; On output the drive doesn't seem to mind the extra cycle.
-
-dofixinp:  glo     rf                  ; setup dma pointer to point
-           plo     r0                  ; to specified data buffer
-           ghi     rf
-           phi     r0
-
-           adi     2                   ; update rf to account for transfer
-           phi     rf
-           ldn     rf                  ; save memory byte just past buffer
-
-           out     cf_addr             ; set sector counter for dma
-           db      cf_count + 1        ; to one sector
-
-           out     cf_addr             ; enable dma for input
-           db      cf_dmain            ; transfer will magically happen here
-
-           str     rf                  ; restore saved byte, done twice just
-           str     rf                  ;  as a no-op for timing reasons
-
-           ; End of data transfer, check for errors and report as needed.
-
-cfresume:  out     cf_addr             ; clear address register to disable
-           db      ide_stat            ; dma and select status register
-
-           sex     r2                  ; input to stack
-
-cfcheck:   inp     cf_data             ; read status register
-           xri     ide_rdy             ; check if RDY is set
-           ani     ide_bsy + ide_rdy   ; and BSY is clear
-           bnz     cfcheck             ; wait until they are
-
-cfreturn:  adi     255                 ; if d=0 set df=0, if d>0 set df=1
-           ldn     r2                  ; get saved status register value
-           sep     r5                  ; return to caller
-
-cfpopret:  inc     r2
-           br      cfreturn
-
-modend:    ; This is the last of what's copied to the heap.
-
-buffer:    ds      512
-
-end:       ; That's all folks!
+end:      ; That's all folks!
 

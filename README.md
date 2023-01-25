@@ -1,5 +1,7 @@
 This is a loadable Elf/OS driver for the 1802/Mini compact flash card which supports DMA-driven I/O operations. This improves transfer rate from the CF card by a factor of approximately 10 over the standard BIOS IDE routines, and does not require any modification of BIOS to work.
 
+Build 9 is a major rewrite of the driver to make it work properly with two drives and to improve handling and reporting of drive errors. The detection of DMA overrun fixup is also now dynamic and is detected write-by-write and corrected only as needed. This will be more reliable in extreme borderline cases.
+
 Builds later than 7 require kernel 0.4.0 and utilize the new heap manager which it provides.
 
 As of build 6, there is a software workaround incorporated for latency on the DMAIN signal which could occur at high clock rates depending on the speed of the chips. It would also happen if the pull-up resistors on the processor card are higher values than the 4.7K that is recommended. At load time, the system is tested to determine if the fix is needed and it is only installed if so. On normal systems this is likely to be at around a 6-7Mhz clock with a Rev A card or a 7-8 Mhz clock with a Rev B card, and so the fix would not be installed when runing within normal specifications.

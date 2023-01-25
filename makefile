@@ -1,11 +1,8 @@
-PROJECT = hydro
 
-$(PROJECT).prg: $(PROJECT).asm bios.inc kernel.inc
-	rcasm -l -v -x -d 1802 $(PROJECT) > $(PROJECT).lst
-	hextobin $(PROJECT)
+hydro.bin: hydro.asm include/bios.inc include/kernel.inc
+	asm02 -L -b hydro.asm
 
 clean:
-	-rm -f $(PROJECT).lst
-	-rm -f $(PROJECT).prg
-	-rm -f $(PROJECT).bin
+	-rm -f hydro.lst
+	-rm -f hydro.bin
 
