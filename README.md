@@ -1,5 +1,9 @@
 This is a loadable Elf/OS driver for the 1802/Mini compact flash card which supports DMA-driven I/O operations. This improves transfer rate from the CF card by a factor of approximately 10 over the standard BIOS IDE routines, and does not require any modification of BIOS to work.
 
+Build 10 is again a major rewrite, which splits the driver into separate initialization and run-time code, and will become the basis of the IDE driver in the next revision of MBIOS. The initialization code is much more thorough in validating drives and now displays drive information at load time. This version supports multiple controllers using port groups, allowing more than one controller to be supported in the 1802/Mini, with up to four drives supported by default. The run-time driver has been unified and made smaller, and the same driver now supports both DMA and non-DMA operation, determined dynamically.
+
+Two options are supported on Build 10. The "-g" option specifies a list of port groups to look for controllers at, and the "-s" option does the same but first looks at the default port group before those specified. Multiple groups may be given as a list separated by commas, or the options may be repeated multiple times. After the first instance of either option, they are equivalent.
+
 Build 9 is a major rewrite of the driver to make it work properly with two drives and to improve handling and reporting of drive errors. The detection of DMA overrun fixup is also now dynamic and is detected write-by-write and corrected only as needed. This will be more reliable in extreme borderline cases.
 
 Builds later than 7 require kernel 0.4.0 and utilize the new heap manager which it provides.
